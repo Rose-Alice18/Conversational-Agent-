@@ -31,5 +31,5 @@ async def chat(request: ChatRequest):
 
     result = await _agent.ainvoke({"messages": lc_messages})
 
-    ai_reply = result["messages"][-1].content
+    ai_reply = result["messages"][-1].content.replace("\n", " ").strip()
     return ChatResponse(reply=ai_reply)
