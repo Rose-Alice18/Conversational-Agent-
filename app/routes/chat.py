@@ -24,9 +24,9 @@ async def reinit_agent(context_text: str = "") -> None:
 async def chat(request: ChatRequest):
     lc_messages = []
     for msg in request.messages:
-        if msg.role == "user":
+        if msg.role.lower() == "user":
             lc_messages.append(HumanMessage(content=msg.content))
-        elif msg.role == "assistant":
+        elif msg.role.lower() == "assistant":
             lc_messages.append(AIMessage(content=msg.content))
 
     result = await _agent.ainvoke({"messages": lc_messages})
