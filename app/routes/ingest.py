@@ -32,7 +32,7 @@ async def ingest_excel(file: UploadFile = File(...)):
             detail=(
                 "Products table already contains data. "
                 "Ingestion is only allowed on an empty database. "
-                "Run DROP TABLE products; in Postgres to reset."
+                "Call POST /api/reset first to clear the database."
             ),
         )
     except ValueError as exc:

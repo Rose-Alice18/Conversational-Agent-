@@ -49,6 +49,8 @@ def _extract_image_url(text: str) -> tuple[str, str | None]:
     if match:
         url = match.group(1).strip()
         clean = text.replace(match.group(0), "").strip()
+        # Remove trailing colon or colon+period left after tag removal (e.g. "photo: " → "photo")
+        clean = re.sub(r'[:\s]+$', '', clean).strip()
         return clean, url
     return text, None
 
