@@ -130,12 +130,24 @@ async def chat_cua(request: CUAChatRequest):
     """CUA adapter endpoint — translates the CUA's conversation format and routes to the Hybrid agent."""
     try:
         customer_name = request.active_query.speaker
+
+        # Collect the active query texts so we can avoid duplicating them in history
+        active_query_texts = {q.content.strip() for q in request.active_query.queries}
+
+        # Build conversation history, skipping any entries that are already the active query
         lc_messages = []
         for entry in request.conversation_transcript:
+            if entry.content.strip() in active_query_texts:
+                continue  # will be appended explicitly at the end
             if entry.speaker == customer_name:
                 lc_messages.append(HumanMessage(content=entry.content))
             else:
                 lc_messages.append(AIMessage(content=entry.content))
+
+        # Always append the active query last so the agent answers it
+        for q in request.active_query.queries:
+            lc_messages.append(HumanMessage(content=q.content))
+
         result = await _agent.ainvoke({"messages": lc_messages})
         raw = _get_content(result["messages"][-1]).replace("\n", " ").strip()
         reply, image_url = _extract_image_url(raw)
