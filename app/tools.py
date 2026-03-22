@@ -10,15 +10,29 @@ async def search_products(query: str) -> str:
     """Search inventory by keyword across product name, description, category, and SKU.
     Use this for general product searches when the customer gives a keyword or phrase."""
     async with async_session() as session:
-        stmt = select(Product).where(
-            or_(
-                Product.name.ilike(f"%{query}%"),
-                Product.description.ilike(f"%{query}%"),
-                Product.category.ilike(f"%{query}%"),
-                Product.sku.ilike(f"%{query}%"),
+        def _build_stmt(q: str):
+            return select(Product).where(
+                or_(
+                    Product.name.ilike(f"%{q}%"),
+                    Product.description.ilike(f"%{q}%"),
+                    Product.category.ilike(f"%{q}%"),
+                    Product.sku.ilike(f"%{q}%"),
+                )
             )
-        )
-        results = (await session.execute(stmt)).scalars().all()
+
+        results = (await session.execute(_build_stmt(query))).scalars().all()
+
+        # If full phrase matched nothing, retry with each word individually
+        if not results:
+            seen_ids = set()
+            for word in query.split():
+                if len(word) < 3:
+                    continue
+                word_results = (await session.execute(_build_stmt(word))).scalars().all()
+                for r in word_results:
+                    if r.id not in seen_ids:
+                        seen_ids.add(r.id)
+                        results.append(r)
 
     if not results:
         return f"No products found matching '{query}'."
@@ -27,10 +41,16 @@ async def search_products(query: str) -> str:
     for item in results:
         stock = "in stock" if item.quantity > 0 else "out of stock"
         sku_part = f" [SKU: {item.sku}]" if item.sku else ""
+        extra = ""
+        if item.extra_data:
+            extra_parts = [f"{k}: {v}" for k, v in item.extra_data.items()
+                           if not str(v).startswith("http")]
+            if extra_parts:
+                extra = " | " + ", ".join(extra_parts)
         lines.append(
-            f"- {item.name}{sku_part}: ${item.price:.2f} "
-            f"({stock}, {item.quantity} available) "
-            f"[Category: {item.category}] — {item.description}"
+            f"- {item.name}{sku_part}: GHS {item.price:.2f} "
+            f"({stock}){extra} "
+            f"[Category: {item.category}]"
         )
     return "\n".join(lines)
 
@@ -97,10 +117,27 @@ async def check_product_stock(product_name: str) -> str:
 @tool
 async def get_product_details(product_name: str) -> str:
     """Get full details for a specific product including all fields and extra attributes.
-    Use this when a customer wants complete information about a particular product."""
+    Use this when a customer wants complete information about a particular product,
+    or when a customer asks for a photo or image of a product."""
     async with async_session() as session:
-        stmt = select(Product).where(Product.name.ilike(f"%{product_name}%"))
-        results = (await session.execute(stmt)).scalars().all()
+        results = (await session.execute(
+            select(Product).where(Product.name.ilike(f"%{product_name}%"))
+        )).scalars().all()
+
+        # Fallback: retry word by word if full phrase matched nothing
+        if not results:
+            seen_ids = set()
+            results = []
+            for word in product_name.split():
+                if len(word) < 3:
+                    continue
+                word_results = (await session.execute(
+                    select(Product).where(Product.name.ilike(f"%{word}%"))
+                )).scalars().all()
+                for r in word_results:
+                    if r.id not in seen_ids:
+                        seen_ids.add(r.id)
+                        results.append(r)
 
     if not results:
         return f"No product found matching '{product_name}'."
@@ -118,7 +155,12 @@ async def get_product_details(product_name: str) -> str:
             lines.append(f"SKU: {item.sku}")
         if item.extra_data:
             for k, v in item.extra_data.items():
-                lines.append(f"{k.replace('_', ' ').title()}: {v}")
+                is_image = any(kw in k.lower() for kw in ["image", "photo", "picture", "img", "url"])
+                is_url = str(v).strip().startswith("http")
+                if is_image and is_url:
+                    lines.append(f"Image URL: [IMAGE:{str(v).strip()}]")
+                else:
+                    lines.append(f"{k.replace('_', ' ').title()}: {v}")
         sections.append("\n".join(lines))
 
     return "\n\n---\n\n".join(sections)
@@ -140,7 +182,7 @@ async def get_inventory_overview() -> str:
                 )
             )
         ).one()
-        total, min_price, max_price, total_stock = stats
+        total, min_price, max_price, _ = stats
 
         out_of_stock = (
             await session.execute(

@@ -37,3 +37,12 @@ class StoreContext(Base):
     context_text: Mapped[str] = mapped_column(Text)
     column_roles: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class ProductCatalog(Base):
+    __tablename__ = "product_catalog"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    catalog_text: Mapped[str] = mapped_column(Text)
+    sentence_count: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

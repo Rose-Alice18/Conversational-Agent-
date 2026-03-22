@@ -4,10 +4,11 @@ from fastapi import FastAPI
 from sqlalchemy import select
 
 from app.database import async_session, engine
-from app.models import Base, StoreContext
-from app.routes.chat import init_agent
+from app.models import Base, ProductCatalog, StoreContext
+from app.routes.chat import init_agent, init_context_only_agent, init_tools_only_agent
 from app.routes.chat import router as chat_router
 from app.routes.ingest import router as ingest_router
+from app.routes.reset import router as reset_router
 
 
 async def _startup() -> None:
@@ -17,13 +18,23 @@ async def _startup() -> None:
 
     # Load the most recent store context and inject into the agent
     context_text = ""
+    catalog_text = ""
     async with async_session() as session:
-        stmt = select(StoreContext).order_by(StoreContext.id.desc()).limit(1)
-        row = (await session.execute(stmt)).scalars().first()
-        if row:
-            context_text = row.context_text
+        ctx_row = (await session.execute(
+            select(StoreContext).order_by(StoreContext.id.desc()).limit(1)
+        )).scalars().first()
+        if ctx_row:
+            context_text = ctx_row.context_text
+
+        cat_row = (await session.execute(
+            select(ProductCatalog).order_by(ProductCatalog.id.desc()).limit(1)
+        )).scalars().first()
+        if cat_row:
+            catalog_text = cat_row.catalog_text
 
     init_agent(context_text)
+    init_tools_only_agent(context_text)
+    init_context_only_agent(context_text, catalog_text)
 
 
 @asynccontextmanager
@@ -35,3 +46,4 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Shop Assistant", version="0.1.0", lifespan=lifespan)
 app.include_router(chat_router, prefix="/api")
 app.include_router(ingest_router, prefix="/api")
+app.include_router(reset_router, prefix="/api")

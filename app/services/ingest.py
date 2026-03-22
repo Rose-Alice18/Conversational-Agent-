@@ -9,7 +9,7 @@ from sqlalchemy import func, select, text
 
 from app.config import settings
 from app.database import async_session, engine
-from app.models import Base, BusinessInfo, Product, StoreContext
+from app.models import Base, BusinessInfo, Product, ProductCatalog, StoreContext
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -27,6 +27,8 @@ ROLE_KEYWORDS: dict[str, list[str]] = {
 }
 
 INFO_KEYWORDS = ["info", "about", "business", "contact", "company", "store", "shop"]
+
+CATALOG_SHEET_KEYWORDS = ["catalog", "catalogue"]
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +70,28 @@ def _is_info_sheet(sheet_name: str, df: pd.DataFrame) -> bool:
         if not non_empty.empty and non_empty.str.len().mean() < 40:
             return True
     return False
+
+
+def _is_catalog_sheet(sheet_name: str) -> bool:
+    """Return True if this sheet is a pre-written product catalog."""
+    return any(kw in sheet_name.lower() for kw in CATALOG_SHEET_KEYWORDS)
+
+
+def _read_catalog_sheet(df: pd.DataFrame) -> list[str]:
+    """Extract product sentences from a pre-written catalog sheet.
+
+    Reads each row and takes the first non-empty cell value.
+    The Catalog sheet should contain only sentences — no title rows,
+    no category headers, no subtitles.
+    """
+    sentences = []
+    for _, row in df.iterrows():
+        for val in row:
+            stripped = str(val).strip()
+            if stripped and stripped.lower() not in ("nan", "none", ""):
+                sentences.append(stripped)
+                break
+    return sentences
 
 
 # ---------------------------------------------------------------------------
@@ -134,11 +158,16 @@ def _llm_classify_columns(columns: list[str]) -> dict[str, str]:
 def _parse_product_row(row: pd.Series, role_map: dict[str, str]) -> dict[str, Any] | None:
     """Map a DataFrame row to Product field values using the detected role map.
     Returns None if the row has no usable product name."""
-    # Build role → first matching column mapping
+    core_roles = {"name", "price", "quantity", "category", "description", "sku"}
+
+    # Build role → first matching column mapping and track which columns are primary
     role_to_col: dict[str, str] = {}
+    primary_cols: set[str] = set()
     for col, role in role_map.items():
         if role not in role_to_col:
             role_to_col[role] = col
+            if role in core_roles:
+                primary_cols.add(col)
 
     def get(role: str) -> str:
         col = role_to_col.get(role)
@@ -182,16 +211,21 @@ def _parse_product_row(row: pd.Series, role_map: dict[str, str]) -> dict[str, An
     sku_val = get("sku")
     sku = sku_val if sku_val and sku_val.lower() not in ("nan", "none", "") else None
 
-    # Collect extra columns: roles not in the core set go into extra_data
-    core_roles = {"name", "price", "quantity", "category", "description", "sku"}
+    # Collect extra columns:
+    # - Columns not assigned as primary for a core role go into extra_data
+    # - This includes duplicate price/quantity columns (e.g. refurbished price, refurb units)
     extra_data: dict[str, str] = {}
     for col in row.index:
+        if col in primary_cols:
+            continue  # already used as a primary core field
         col_role = role_map.get(col)
-        if col_role in core_roles:
-            continue
         val = str(row[col]).strip()
         if val and val.lower() not in ("nan", "none", ""):
-            key = col_role if col_role else str(col)
+            # Non-core roles use role name as key; duplicate core roles use original column name
+            if col_role and col_role not in core_roles:
+                key = col_role
+            else:
+                key = str(col)
             extra_data[key] = val
 
     return {
@@ -286,6 +320,117 @@ async def _build_context_string(session) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Product catalog builder
+# ---------------------------------------------------------------------------
+
+def _fmt_price(price, currency: str) -> str:
+    """Format a price as a clean integer with currency, e.g. '10,999 GHS'."""
+    try:
+        f = float(price)
+        return f"{int(f):,} {currency}" if f == int(f) else f"{f:,.2f} {currency}"
+    except (TypeError, ValueError):
+        return str(price)
+
+
+def _llm_generate_product_sentences(products: list, currency: str = "GHS") -> list[str]:
+    """Use LLM to convert a batch of product records to natural language sentences."""
+    lines = []
+    for idx, p in enumerate(products, 1):
+        # Format extra_data prices with currency too
+        raw_extra = p.extra_data or {}
+        formatted_extra: dict = {}
+        for k, v in raw_extra.items():
+            try:
+                fv = float(v)
+                formatted_extra[k] = _fmt_price(fv, currency)
+            except (TypeError, ValueError):
+                formatted_extra[k] = v
+        extra = json.dumps(formatted_extra) if formatted_extra else "{}"
+
+        lines.append(
+            f"{idx}. Name: {p.name}, Category: {p.category or 'N/A'}, "
+            f"Price: {_fmt_price(p.price, currency)}, Quantity: {p.quantity or 0}, "
+            f"SKU: {p.sku or 'N/A'}, Description: {p.description or 'N/A'}, "
+            f"Additional fields: {extra}"
+        )
+
+    product_list = "\n".join(lines)
+    prompt = (
+        "Convert each product record below into one natural, friendly sentence a shop assistant would say.\n"
+        f"All prices are already formatted with the correct currency ({currency}) — use them exactly as shown, do not add or change the currency symbol.\n"
+        "Rules:\n"
+        "- Include the exact product name, color, storage/variant if present.\n"
+        "- State the new/regular price exactly as given and say 'currently in stock' if Quantity > 0, or 'currently out of stock' if Quantity is 0.\n"
+        "- If 'Additional fields' contains a refurbished price (any key with 'refurb' or 'refurbished' in the name), "
+        "explicitly state the refurbished price too and use the same currency. Then check for a refurbished quantity key (any key with 'refurb' "
+        "in the name that looks like a count/units/qty). If that refurb quantity > 0 say 'refurbished units currently in stock', "
+        "otherwise say 'refurbished units currently out of stock'.\n"
+        "- If 'Additional fields' is empty or '{}', only mention the regular price and stock status.\n"
+        "- Do not use markdown, bullet points, or dashes.\n"
+        "- Do not group multiple products together — each numbered entry must produce exactly one sentence.\n"
+        "- Return exactly one sentence per product, numbered to match the input (e.g. '1. We have...').\n\n"
+        f"{product_list}"
+    )
+
+    llm = ChatOpenAI(
+        model=settings.openai_model,
+        api_key=settings.openai_api_key,
+        temperature=0,
+    )
+
+    try:
+        response = llm.invoke([{"role": "user", "content": prompt}])
+        raw = response.content.strip()
+
+        sentence_map: dict[int, str] = {}
+        for line in raw.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            match = re.match(r'^(\d+)[.)]\s+(.+)$', line)
+            if match:
+                sentence_map[int(match.group(1))] = match.group(2).strip()
+
+        return [
+            sentence_map.get(idx, f"We have {p.name} available in our store.")
+            for idx, p in enumerate(products, 1)
+        ]
+    except Exception:
+        return [
+            f"We have {p.name} in the {p.category} category, priced at {p.price}."
+            for p in products
+        ]
+
+
+async def _build_product_catalog(session) -> tuple[str, int]:
+    """Query all products and generate one natural language sentence per product."""
+    result = await session.execute(select(Product).order_by(Product.id))
+    products = result.scalars().all()
+
+    if not products:
+        return "", 0
+
+    # Read currency from business_info; default to GHS if not set
+    currency_row = (
+        await session.execute(
+            select(BusinessInfo).where(BusinessInfo.key == "currency")
+        )
+    ).scalars().first()
+    currency = currency_row.value.strip().upper() if currency_row else "GHS"
+
+    all_sentences: list[str] = []
+    batch_size = 50
+
+    for i in range(0, len(products), batch_size):
+        batch = products[i:i + batch_size]
+        sentences = _llm_generate_product_sentences(batch, currency=currency)
+        all_sentences.extend(sentences)
+
+    catalog_text = "\n\n".join(all_sentences)
+    return catalog_text, len(all_sentences)
+
+
+# ---------------------------------------------------------------------------
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
@@ -310,8 +455,14 @@ async def run_ingest(file_bytes: bytes) -> dict[str, Any]:
     product_rows: list[Product] = []
     info_pairs: dict[str, str] = {}
     all_role_maps: dict[str, dict] = {}
+    catalog_sentences_from_sheet: list[str] = []
 
     for sheet_name, df in sheets.items():
+        # Pre-written catalog sheet — read sentences directly, skip further processing
+        if _is_catalog_sheet(sheet_name):
+            catalog_sentences_from_sheet = _read_catalog_sheet(df)
+            continue
+
         if _is_info_sheet(sheet_name, df):
             for pair in _parse_info_sheet(df):
                 info_pairs[pair["key"]] = pair["value"]
@@ -375,15 +526,26 @@ async def run_ingest(file_bytes: bytes) -> dict[str, Any]:
 
         context_text = await _build_context_string(session)
 
+        if catalog_sentences_from_sheet:
+            # Use pre-written sentences from the Catalog sheet — no LLM calls needed
+            catalog_text = "\n\n".join(catalog_sentences_from_sheet)
+            sentence_count = len(catalog_sentences_from_sheet)
+        else:
+            # Fall back to LLM-generated sentences
+            catalog_text, sentence_count = await _build_product_catalog(session)
+
         combined_roles: dict[str, str] = {}
         for sheet_roles in all_role_maps.values():
             combined_roles.update(sheet_roles)
 
         session.add(StoreContext(context_text=context_text, column_roles=combined_roles))
+        session.add(ProductCatalog(catalog_text=catalog_text, sentence_count=sentence_count))
         await session.commit()
 
     return {
         "inventory_count": len(product_rows),
         "business_info_count": len(info_pairs),
         "context_text": context_text,
+        "catalog_text": catalog_text,
+        "catalog_sentence_count": sentence_count,
     }

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.routes.chat import reinit_agent
+from app.routes.chat import reinit_agent, reinit_context_only_agent, reinit_tools_only_agent
 from app.services.ingest import ProductsNotEmptyError, run_ingest
 
 router = APIRouter()
@@ -10,6 +10,7 @@ router = APIRouter()
 class IngestResponse(BaseModel):
     inventory_count: int
     business_info_count: int
+    catalog_sentence_count: int
     message: str
 
 
@@ -37,15 +38,19 @@ async def ingest_excel(file: UploadFile = File(...)):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    # Hot-reload the agent with the newly built store context
+    # Hot-reload all agents with the newly built store context
     await reinit_agent(result["context_text"])
+    await reinit_tools_only_agent(result["context_text"])
+    await reinit_context_only_agent(result["context_text"], result["catalog_text"])
 
     return IngestResponse(
         inventory_count=result["inventory_count"],
         business_info_count=result["business_info_count"],
+        catalog_sentence_count=result["catalog_sentence_count"],
         message=(
             f"Successfully ingested {result['inventory_count']} products "
             f"and {result['business_info_count']} business info entries. "
+            f"{result['catalog_sentence_count']} product sentences written to catalog. "
             f"Agent reloaded with updated store context."
         ),
     )

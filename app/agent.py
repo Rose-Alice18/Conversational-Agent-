@@ -18,12 +18,15 @@ _BASE_PROMPT = (
     "- Always state prices accurately — do not guess or round them\n"
     "- Never reveal stock numbers or unit counts to the customer — never say things like '18 units available' or '12 in stock'\n"
     "- Only say whether something is available or not — for example 'we have that in stock' or 'that one is currently unavailable'\n"
-    "- If listing multiple items, write them naturally in a sentence or two, not as a list\n"
-    "- Be warm and end with an offer to help further if appropriate"
+    "- When a product has multiple storage sizes, give each storage tier's price, then group colors within that tier (e.g. 'The 128GB is GHS 7,999 — Blue and Starlight are in stock, Midnight is unavailable')\n"
+    "- Never use dashes or hyphens as separators between items — write in flowing connected sentences\n"
+    "- Be warm and end with an offer to help further if appropriate\n"
+    "- When a customer asks for a photo or image of a product and you have an image URL, include it at the very end of your reply in this exact format: [IMAGE:https://...] — nothing after it"
 )
 
 
 def build_agent(context_text: str = ""):
+    """Existing hybrid agent — uses both context string and tools."""
     if context_text:
         system_prompt = (
             f"{_BASE_PROMPT}\n\n"
@@ -41,5 +44,63 @@ def build_agent(context_text: str = ""):
     return create_react_agent(
         model=llm,
         tools=all_tools,
+        prompt=system_prompt,
+    )
+
+
+def build_tools_only_agent(context_text: str = ""):
+    """Agent that relies entirely on tool calls for product data.
+    Receives store context only for background details like currency and store name."""
+    if context_text:
+        system_prompt = (
+            f"{_BASE_PROMPT}\n\n"
+            f"Here is background information about this store (currency, name, policies). "
+            f"Use tools for all product queries — use this only for store-level context:\n\n"
+            f"{context_text}"
+        )
+    else:
+        system_prompt = _BASE_PROMPT
+
+    llm = ChatOpenAI(
+        model=settings.openai_model,
+        api_key=settings.openai_api_key,
+    )
+    return create_react_agent(
+        model=llm,
+        tools=all_tools,
+        prompt=system_prompt,
+    )
+
+
+def build_context_only_agent(context_text: str = "", catalog_text: str = ""):
+    """Agent that relies entirely on the context string and product catalog — no tools available."""
+    if context_text or catalog_text:
+        system_prompt = (
+            f"{_BASE_PROMPT}\n\n"
+            f"Here is everything you know about this store. "
+            f"Use only this information to answer questions. "
+            f"Do not attempt to look anything up — answer only from what is provided below.\n\n"
+            f"Additional rules for product answers:\n"
+            f"- When a product comes in multiple storage sizes, treat each storage size as its own tier and give its price.\n"
+            f"- Within each storage tier, group the colors together: mention which colors are in stock and which are unavailable, rather than listing every color as a separate sentence.\n"
+            f"- Example of good format: 'The 128GB is GHS 7,999 — Blue and Starlight are in stock, while Midnight and Red are currently unavailable. The 256GB is GHS 9,499 — Pink and Red are available.'\n"
+            f"- If a product also has a Refurbished version, state the refurbished price and whether it is in stock after the new price.\n"
+            f"- Never use dashes or bullet points to separate items — write in flowing sentences.\n"
+            f"- Keep responses concise — do not repeat the product name before every color.\n\n"
+        )
+        if context_text:
+            system_prompt += f"STORE SUMMARY:\n{context_text}\n\n"
+        if catalog_text:
+            system_prompt += f"FULL PRODUCT CATALOG:\n{catalog_text}"
+    else:
+        system_prompt = _BASE_PROMPT
+
+    llm = ChatOpenAI(
+        model=settings.openai_model,
+        api_key=settings.openai_api_key,
+    )
+    return create_react_agent(
+        model=llm,
+        tools=[],
         prompt=system_prompt,
     )
