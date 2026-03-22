@@ -69,7 +69,7 @@ async def browse_by_category(category: str) -> str:
     lines = [f"Products in '{category}':"]
     for item in results:
         stock = "in stock" if item.quantity > 0 else "out of stock"
-        lines.append(f"- {item.name}: ${item.price:.2f} ({stock})")
+        lines.append(f"- {item.name}: GHS {item.price:.2f} ({stock})")
     return "\n".join(lines)
 
 
@@ -86,11 +86,11 @@ async def filter_by_price(min_price: float, max_price: float) -> str:
         results = (await session.execute(stmt)).scalars().all()
 
     if not results:
-        return f"No products found between ${min_price:.2f} and ${max_price:.2f}."
+        return f"No products found between GHS {min_price:.2f} and GHS {max_price:.2f}."
 
-    lines = [f"Products priced between ${min_price:.2f} and ${max_price:.2f}:"]
+    lines = [f"Products priced between GHS {min_price:.2f} and GHS {max_price:.2f}:"]
     for item in results:
-        lines.append(f"- {item.name}: ${item.price:.2f} [{item.category}]")
+        lines.append(f"- {item.name}: GHS {item.price:.2f} [{item.category}]")
     return "\n".join(lines)
 
 
@@ -146,7 +146,7 @@ async def get_product_details(product_name: str) -> str:
     for item in results:
         lines = [
             f"Name: {item.name}",
-            f"Price: ${item.price:.2f}",
+            f"Price: GHS {item.price:.2f}",
             f"Category: {item.category}",
             f"Stock: {item.quantity} units",
             f"Description: {item.description}",
@@ -210,7 +210,7 @@ async def get_inventory_overview() -> str:
     return (
         f"Inventory Overview:\n"
         f"- {total} products across {len(categories)} categories: {cat_list}\n"
-        f"- Price range: ${min_price:.2f} — ${max_price:.2f}\n"
+        f"- Price range: GHS {min_price:.2f} — GHS {max_price:.2f}\n"
         f"- {in_stock} items in stock, {out_of_stock} out of stock\n"
         f"- Example products: {sample_list}"
     )
