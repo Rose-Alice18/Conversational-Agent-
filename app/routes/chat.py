@@ -47,15 +47,15 @@ async def reinit_context_only_agent(context_text: str = "", catalog_text: str = 
 
 
 def _extract_image_url(text: str) -> tuple[str, str | None]:
-    """Extract [IMAGE:url] tag from agent reply. Returns (clean_reply, image_url)."""
-    match = re.search(r'\[IMAGE:(https?://[^\]]+)\]', text)
-    if match:
-        url = match.group(1).strip()
-        clean = text.replace(match.group(0), "").strip()
-        # Remove trailing colon or colon+period left after tag removal (e.g. "photo: " → "photo")
-        clean = re.sub(r'[:\s]+$', '', clean).strip()
-        return clean, url
-    return text, None
+    """Extract [IMAGE:url] tags from agent reply.
+    Returns (clean_reply, first_image_url) — ALL tags are stripped from the reply text."""
+    matches = re.findall(r'\[IMAGE:(https?://[^\]]+)\]', text)
+    image_url = matches[0].strip() if matches else None
+    # Remove every [IMAGE:...] tag from the reply text
+    clean = re.sub(r'\[IMAGE:https?://[^\]]+\]', '', text).strip()
+    # Remove trailing label artifacts like "Lavender 256GB:  " left after tag removal
+    clean = re.sub(r'[\w\s]+:\s*$', '', clean).strip()
+    return clean, image_url
 
 
 def _get_content(message) -> str:
