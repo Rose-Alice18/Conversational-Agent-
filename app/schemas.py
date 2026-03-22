@@ -11,7 +11,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    reply: str
+    message: str
     image_url: str | None = None
 
 

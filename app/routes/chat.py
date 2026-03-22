@@ -1,10 +1,13 @@
+import logging
 import re
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent import build_agent, build_context_only_agent, build_tools_only_agent
 from app.schemas import ChatRequest, ChatResponse, CUAChatRequest
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -55,6 +58,21 @@ def _extract_image_url(text: str) -> tuple[str, str | None]:
     return text, None
 
 
+def _get_content(message) -> str:
+    """Safely extract plain-text content from a LangChain message.
+    Handles both str and list[dict] content (newer LangChain versions)."""
+    content = message.content
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content
+        ]
+        return " ".join(parts)
+    return str(content)
+
+
 def _build_lc_messages(request: ChatRequest):
     lc_messages = []
     for msg in request.messages:
@@ -68,46 +86,60 @@ def _build_lc_messages(request: ChatRequest):
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """Hybrid agent — uses both store context and tool calls."""
-    lc_messages = _build_lc_messages(request)
-    result = await _agent.ainvoke({"messages": lc_messages})
-    raw = result["messages"][-1].content.replace("\n", " ").strip()
-    reply, image_url = _extract_image_url(raw)
-    return ChatResponse(message=reply, image_url=image_url)
+    try:
+        lc_messages = _build_lc_messages(request)
+        result = await _agent.ainvoke({"messages": lc_messages})
+        raw = _get_content(result["messages"][-1]).replace("\n", " ").strip()
+        reply, image_url = _extract_image_url(raw)
+        return ChatResponse(message=reply, image_url=image_url)
+    except Exception as exc:
+        logger.exception("Error in /chat")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/chat/tools-only", response_model=ChatResponse)
 async def chat_tools_only(request: ChatRequest):
     """Tools-only agent — answers every question by querying the database directly."""
-    lc_messages = _build_lc_messages(request)
-    result = await _tools_only_agent.ainvoke({"messages": lc_messages})
-    raw = result["messages"][-1].content.replace("\n", " ").strip()
-    reply, image_url = _extract_image_url(raw)
-    return ChatResponse(message=reply, image_url=image_url)
+    try:
+        lc_messages = _build_lc_messages(request)
+        result = await _tools_only_agent.ainvoke({"messages": lc_messages})
+        raw = _get_content(result["messages"][-1]).replace("\n", " ").strip()
+        reply, image_url = _extract_image_url(raw)
+        return ChatResponse(message=reply, image_url=image_url)
+    except Exception as exc:
+        logger.exception("Error in /chat/tools-only")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/chat/context-only", response_model=ChatResponse)
 async def chat_context_only(request: ChatRequest):
     """Context-only agent — answers only from the store context string, no tool calls."""
-    lc_messages = _build_lc_messages(request)
-    result = await _context_only_agent.ainvoke({"messages": lc_messages})
-    raw = result["messages"][-1].content.replace("\n", " ").strip()
-    reply, image_url = _extract_image_url(raw)
-    return ChatResponse(message=reply, image_url=image_url)
+    try:
+        lc_messages = _build_lc_messages(request)
+        result = await _context_only_agent.ainvoke({"messages": lc_messages})
+        raw = _get_content(result["messages"][-1]).replace("\n", " ").strip()
+        reply, image_url = _extract_image_url(raw)
+        return ChatResponse(message=reply, image_url=image_url)
+    except Exception as exc:
+        logger.exception("Error in /chat/context-only")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/chat/cua", response_model=ChatResponse)
 async def chat_cua(request: CUAChatRequest):
     """CUA adapter endpoint — translates the CUA's conversation format and routes to the Hybrid agent."""
-    customer_name = request.active_query.speaker
-
-    lc_messages = []
-    for entry in request.conversation_transcript:
-        if entry.speaker == customer_name:
-            lc_messages.append(HumanMessage(content=entry.content))
-        else:
-            lc_messages.append(AIMessage(content=entry.content))
-
-    result = await _agent.ainvoke({"messages": lc_messages})
-    raw = result["messages"][-1].content.replace("\n", " ").strip()
-    reply, image_url = _extract_image_url(raw)
-    return ChatResponse(message=reply, image_url=image_url)
+    try:
+        customer_name = request.active_query.speaker
+        lc_messages = []
+        for entry in request.conversation_transcript:
+            if entry.speaker == customer_name:
+                lc_messages.append(HumanMessage(content=entry.content))
+            else:
+                lc_messages.append(AIMessage(content=entry.content))
+        result = await _agent.ainvoke({"messages": lc_messages})
+        raw = _get_content(result["messages"][-1]).replace("\n", " ").strip()
+        reply, image_url = _extract_image_url(raw)
+        return ChatResponse(message=reply, image_url=image_url)
+    except Exception as exc:
+        logger.exception("Error in /chat/cua")
+        raise HTTPException(status_code=500, detail=str(exc))
