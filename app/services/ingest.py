@@ -297,15 +297,16 @@ async def _build_context_string(session) -> str:
     categories = [
         r[0] for r in (await session.execute(select(Product.category).distinct())).all()
     ]
-    samples = [
-        r[0] for r in (await session.execute(select(Product.name).limit(5))).all()
-    ]
+
+    # Fetch all product names grouped by category for a complete inventory picture
+    all_products = (
+        await session.execute(select(Product.name, Product.category).order_by(Product.category, Product.name))
+    ).all()
 
     in_stock = (total or 0) - (out_of_stock or 0)
     cat_list = ", ".join(sorted(categories)) if categories else "none"
-    sample_list = ", ".join(samples) if samples else "none"
-    min_p = f"${min_price:.2f}" if min_price is not None else "N/A"
-    max_p = f"${max_price:.2f}" if max_price is not None else "N/A"
+    min_p = f"GHS {min_price:.2f}" if min_price is not None else "N/A"
+    max_p = f"GHS {max_price:.2f}" if max_price is not None else "N/A"
 
     lines = [f"Store: {store_name}"]
     lines.extend(info_lines)
@@ -314,7 +315,14 @@ async def _build_context_string(session) -> str:
     lines.append(f"- {total} products across {len(categories)} categories: {cat_list}")
     lines.append(f"- Price range: {min_p} — {max_p}")
     lines.append(f"- {in_stock} items in stock, {out_of_stock} out of stock")
-    lines.append(f"- Example products: {sample_list}")
+    lines.append("")
+    lines.append("Full product list by category:")
+    current_cat = None
+    for name, cat in all_products:
+        if cat != current_cat:
+            current_cat = cat
+            lines.append(f"  {cat}:")
+        lines.append(f"    - {name}")
 
     return "\n".join(lines)
 
