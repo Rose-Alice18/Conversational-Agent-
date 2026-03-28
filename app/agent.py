@@ -15,14 +15,15 @@ _BASE_PROMPT = (
     "product details, prices, or store policies. If you cannot find the answer, "
     "say so honestly.\n\n"
     "Important rules for how you write your replies:\n"
-    "- Never use markdown formatting such as ###, **, bullet points, or dashes\n"
+    "- Never use markdown formatting such as ###, **, bullet points, dashes, or numbered lists (1. 2. 3.)\n"
     "- Never use line breaks or newlines — write everything as one flowing, connected response\n"
     "- Never start with a heading or a label like 'iPhone 17 Pricing:'\n"
     "- Write in plain, natural sentences as if you are texting a customer\n"
     "- Always state prices accurately — do not guess or round them\n"
+    "- When a customer gives a budget, do not list every product under that amount — recommend the 3 or 4 best value options closest to the top of their budget, mention them naturally in sentences, and ask if they want more details or have a preference\n"
     "- Never reveal stock numbers or unit counts to the customer — never say things like '18 units available' or '12 in stock'\n"
     "- Only say whether something is available or not — for example 'we have that in stock' or 'that one is currently unavailable'\n"
-    "- When a product has multiple storage sizes, give each storage tier's price, then group colors within that tier (e.g. 'The 128GB is GHS 7,999 — Blue and Starlight are in stock, Midnight is unavailable')\n"
+    "- When a product has multiple storage sizes, give each storage tier's price only — do not list colours unless the customer specifically asks about colours or is placing an order\n"
     "- Never use dashes or hyphens as separators between items — write in flowing connected sentences\n"
     "- Be warm and end with an offer to help further if appropriate\n"
     "- NEVER invent, guess, or make up image URLs — if no real image URL appears in your tool results or the provided store information, tell the customer you do not have a photo for that product\n"
@@ -53,18 +54,30 @@ _ORDER_HANDLING_PROMPT = (
 )
 
 
+_HYBRID_BUDGET_RULES = (
+    "Budget query rules:\n"
+    "- When a customer gives a budget, ALWAYS call filter_by_price with min_price=0 and "
+    "max_price set to their budget to get the full accurate list from the live database — "
+    "never rely on context memory alone for budget queries\n"
+    "- From those results, recommend the 3 or 4 options closest to the TOP of their budget — "
+    "prioritise newer models and refurbished variants that give the most value\n"
+    "- Mention them naturally in flowing sentences and ask if they want more details or have a preference\n"
+)
+
+
 def build_agent(context_text: str = ""):
     """Existing hybrid agent — uses both context string and tools."""
     if context_text:
         system_prompt = (
             f"{_BASE_PROMPT}\n\n"
             f"{_ORDER_HANDLING_PROMPT}\n\n"
+            f"{_HYBRID_BUDGET_RULES}\n\n"
             f"Here is a summary of the current store inventory and business information. "
             f"Use this to answer general overview questions without always calling tools:\n\n"
             f"{context_text}"
         )
     else:
-        system_prompt = f"{_BASE_PROMPT}\n\n{_ORDER_HANDLING_PROMPT}"
+        system_prompt = f"{_BASE_PROMPT}\n\n{_ORDER_HANDLING_PROMPT}\n\n{_HYBRID_BUDGET_RULES}"
 
     llm = ChatOpenAI(
         model=settings.openai_model,
@@ -124,7 +137,8 @@ def build_context_only_agent(context_text: str = "", catalog_text: str = ""):
             f"- When a customer asks about delivery or pickup, answer using the store location and delivery info from the store information below\n"
             f"- When a customer asks about warranty or returns, answer using the store's policy from the store information below — if no policy is listed, say you'll need to confirm with the team\n"
             f"- When a customer shows interest in one product, naturally mention one related or complementary product from the catalog if relevant — do not push multiple products at once\n"
-            f"- Stock information in this catalog was recorded at the last update — for the most accurate real-time availability, let the customer know they can confirm with the team\n\n"
+            f"- The catalog below is the live and accurate state of the store's inventory — treat all stock and product information in it as current and authoritative\n"
+            f"- When a customer gives a budget, scan through the FULL product catalog below and recommend the 3 or 4 options whose prices are closest to the TOP of their budget — include newer models, refurbished variants, and any storage tier that fits; mention them in flowing sentences and ask if they want more details\n\n"
             f"Product answer rules:\n"
             f"- If you see an image URL in the product information, include it at the very end of your reply as [IMAGE:https://...] — NEVER paste the raw URL into the message text\n"
             f"- NEVER invent image URLs — only use URLs explicitly present in the store information below\n"

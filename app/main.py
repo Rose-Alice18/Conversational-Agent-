@@ -10,6 +10,7 @@ from app.routes.chat import router as chat_router
 from app.routes.ingest import router as ingest_router
 from app.routes.reset import router as reset_router
 from app.routes.test_ui import router as test_ui_router
+from app.routes.compare_ui import router as compare_ui_router
 
 
 async def _startup() -> None:
@@ -49,3 +50,4 @@ app.include_router(chat_router, prefix="/api")
 app.include_router(ingest_router, prefix="/api")
 app.include_router(reset_router, prefix="/api")
 app.include_router(test_ui_router)
+app.include_router(compare_ui_router)
