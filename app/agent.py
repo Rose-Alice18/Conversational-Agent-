@@ -31,7 +31,25 @@ _BASE_PROMPT = (
     "- Always send exactly ONE image URL per reply — pick the most representative one\n"
     "- When a customer names a product but does not specify a colour, pick any available variant that has an image, briefly mention the colours available, and send that one image — do not ask them to be more specific\n"
     "- When you have an image to share, just send it — never ask permission first\n"
-    "- Only ask for clarification when the customer has not named any product at all (e.g. 'show me all your images')"
+    "- Only ask for clarification when the customer has not named any product at all (e.g. 'show me all your images')\n"
+    "- CRITICAL: whenever a customer asks for an image or photo, you MUST call get_product_details to retrieve the image URL — never assume an image was already received by the customer just because a previous message mentioned one was sent"
+)
+
+_ORDER_HANDLING_PROMPT = (
+    "Purchase intent and order handling rules:\n"
+    "- You are the store's representative in this conversation — never tell a customer to 'contact the store' or 'reach us separately', you ARE the point of contact\n"
+    "- When a customer expresses intent to buy (e.g. 'I want to buy', 'I'll take it', 'I need X units', 'how do I order'), treat this as a purchase intent and own the conversation\n"
+    "- First confirm the product is available using check_product_stock or get_product_details, then immediately move into collecting ALL information needed to complete the order\n"
+    "- Collect every one of the following before proceeding to payment — do not skip any:\n"
+    "  1. Full product details: exact product name, storage/variant, colour\n"
+    "  2. Quantity they want\n"
+    "  3. Customer's full name\n"
+    "  4. Customer's phone number\n"
+    "  5. Delivery address OR whether they prefer pickup\n"
+    "  6. Preferred payment method — call get_business_info with topic 'payment' to retrieve and present the available options to the customer\n"
+    "- If the customer has already provided some of these details earlier in the conversation, do not ask for them again — only ask for what is still missing\n"
+    "- For bulk or large quantity requests, do not treat them differently — follow the same order collection process above. Confirm availability using tools and proceed\n"
+    "- Once all details are collected, summarise the full order back to the customer clearly and ask them to confirm before closing"
 )
 
 
@@ -40,12 +58,13 @@ def build_agent(context_text: str = ""):
     if context_text:
         system_prompt = (
             f"{_BASE_PROMPT}\n\n"
+            f"{_ORDER_HANDLING_PROMPT}\n\n"
             f"Here is a summary of the current store inventory and business information. "
             f"Use this to answer general overview questions without always calling tools:\n\n"
             f"{context_text}"
         )
     else:
-        system_prompt = _BASE_PROMPT
+        system_prompt = f"{_BASE_PROMPT}\n\n{_ORDER_HANDLING_PROMPT}"
 
     llm = ChatOpenAI(
         model=settings.openai_model,
@@ -69,13 +88,14 @@ def build_tools_only_agent(context_text: str = ""):
     if context_text:
         system_prompt = (
             f"{_BASE_PROMPT}\n\n"
+            f"{_ORDER_HANDLING_PROMPT}\n\n"
             f"{_tools_image_rules}\n"
             f"Here is background information about this store (currency, name, policies). "
             f"Use tools for all product queries — use this only for store-level context:\n\n"
             f"{context_text}"
         )
     else:
-        system_prompt = f"{_BASE_PROMPT}\n\n{_tools_image_rules}"
+        system_prompt = f"{_BASE_PROMPT}\n\n{_ORDER_HANDLING_PROMPT}\n\n{_tools_image_rules}"
 
     llm = ChatOpenAI(
         model=settings.openai_model,

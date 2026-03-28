@@ -5,6 +5,16 @@ from app.database import async_session
 from app.models import BusinessInfo, Product
 
 
+async def _get_currency(session) -> str:
+    """Read currency from business_info; default to GHS."""
+    row = (
+        await session.execute(
+            select(BusinessInfo).where(BusinessInfo.key == "currency")
+        )
+    ).scalars().first()
+    return row.value.strip().upper() if row else "GHS"
+
+
 @tool
 async def search_products(query: str) -> str:
     """Search inventory by keyword across product name, description, category, and SKU.
@@ -37,6 +47,9 @@ async def search_products(query: str) -> str:
     if not results:
         return f"No products found matching '{query}'."
 
+    async with async_session() as session:
+        currency = await _get_currency(session)
+
     lines = []
     for item in results:
         stock = "in stock" if item.quantity > 0 else "out of stock"
@@ -48,7 +61,7 @@ async def search_products(query: str) -> str:
             if extra_parts:
                 extra = " | " + ", ".join(extra_parts)
         lines.append(
-            f"- {item.name}{sku_part}: GHS {item.price:.2f} "
+            f"- {item.name}{sku_part}: {currency} {item.price:.2f} "
             f"({stock}){extra} "
             f"[Category: {item.category}]"
         )
@@ -66,10 +79,13 @@ async def browse_by_category(category: str) -> str:
     if not results:
         return f"No products found in category '{category}'."
 
+    async with async_session() as session:
+        currency = await _get_currency(session)
+
     lines = [f"Products in '{category}':"]
     for item in results:
         stock = "in stock" if item.quantity > 0 else "out of stock"
-        lines.append(f"- {item.name}: GHS {item.price:.2f} ({stock})")
+        lines.append(f"- {item.name}: {currency} {item.price:.2f} ({stock})")
     return "\n".join(lines)
 
 
@@ -85,12 +101,15 @@ async def filter_by_price(min_price: float, max_price: float) -> str:
         )
         results = (await session.execute(stmt)).scalars().all()
 
-    if not results:
-        return f"No products found between GHS {min_price:.2f} and GHS {max_price:.2f}."
+    async with async_session() as session:
+        currency = await _get_currency(session)
 
-    lines = [f"Products priced between GHS {min_price:.2f} and GHS {max_price:.2f}:"]
+    if not results:
+        return f"No products found between {currency} {min_price:.2f} and {currency} {max_price:.2f}."
+
+    lines = [f"Products priced between {currency} {min_price:.2f} and {currency} {max_price:.2f}:"]
     for item in results:
-        lines.append(f"- {item.name}: GHS {item.price:.2f} [{item.category}]")
+        lines.append(f"- {item.name}: {currency} {item.price:.2f} [{item.category}]")
     return "\n".join(lines)
 
 
@@ -110,7 +129,7 @@ async def check_product_stock(product_name: str) -> str:
     lines = []
     for name, qty in results:
         status = "in stock" if qty > 0 else "out of stock"
-        lines.append(f"- {name}: {qty} units ({status})")
+        lines.append(f"- {name}: {status}")
     return "\n".join(lines)
 
 
@@ -142,13 +161,17 @@ async def get_product_details(product_name: str) -> str:
     if not results:
         return f"No product found matching '{product_name}'."
 
+    async with async_session() as session:
+        currency = await _get_currency(session)
+
     sections = []
     for item in results:
+        stock_status = "in stock" if item.quantity > 0 else "out of stock"
         lines = [
             f"Name: {item.name}",
-            f"Price: GHS {item.price:.2f}",
+            f"Price: {currency} {item.price:.2f}",
             f"Category: {item.category}",
-            f"Stock: {item.quantity} units",
+            f"Stock: {stock_status}",
             f"Description: {item.description}",
         ]
         if item.sku:
@@ -200,6 +223,8 @@ async def get_inventory_overview() -> str:
             for r in (await session.execute(select(Product.name).limit(5))).all()
         ]
 
+        currency = await _get_currency(session)
+
     if total == 0:
         return "The inventory is currently empty."
 
@@ -210,7 +235,7 @@ async def get_inventory_overview() -> str:
     return (
         f"Inventory Overview:\n"
         f"- {total} products across {len(categories)} categories: {cat_list}\n"
-        f"- Price range: GHS {min_price:.2f} — GHS {max_price:.2f}\n"
+        f"- Price range: {currency} {min_price:.2f} — {currency} {max_price:.2f}\n"
         f"- {in_stock} items in stock, {out_of_stock} out of stock\n"
         f"- Example products: {sample_list}"
     )
