@@ -40,5 +40,5 @@ class CUAMetadata(BaseModel):
 
 class CUAChatRequest(BaseModel):
     conversation_transcript: list[CUATranscriptEntry]
-    active_query: CUAActiveQuery
+    active_query: CUAActiveQuery | None = None
     metadata: CUAMetadata | None = None

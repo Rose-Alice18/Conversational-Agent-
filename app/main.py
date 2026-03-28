@@ -9,6 +9,7 @@ from app.routes.chat import init_agent, init_context_only_agent, init_tools_only
 from app.routes.chat import router as chat_router
 from app.routes.ingest import router as ingest_router
 from app.routes.reset import router as reset_router
+from app.routes.test_ui import router as test_ui_router
 
 
 async def _startup() -> None:
@@ -47,3 +48,4 @@ app = FastAPI(title="Shop Assistant", version="0.1.0", lifespan=lifespan)
 app.include_router(chat_router, prefix="/api")
 app.include_router(ingest_router, prefix="/api")
 app.include_router(reset_router, prefix="/api")
+app.include_router(test_ui_router)

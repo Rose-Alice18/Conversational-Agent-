@@ -303,25 +303,49 @@ async def _build_context_string(session) -> str:
         await session.execute(select(Product.name, Product.category).order_by(Product.category, Product.name))
     ).all()
 
+    # Per-category price ranges
+    cat_price_rows = (
+        await session.execute(
+            select(
+                Product.category,
+                func.min(Product.price),
+                func.max(Product.price),
+            ).group_by(Product.category)
+        )
+    ).all()
+    cat_prices = {cat: (lo, hi) for cat, lo, hi in cat_price_rows}
+
+    # Read currency from business_info; default to GHS
+    currency_row = (
+        await session.execute(select(BusinessInfo).where(BusinessInfo.key == "currency"))
+    ).scalars().first()
+    currency = currency_row.value.strip().upper() if currency_row else "GHS"
+
     in_stock = (total or 0) - (out_of_stock or 0)
     cat_list = ", ".join(sorted(categories)) if categories else "none"
-    min_p = f"GHS {min_price:.2f}" if min_price is not None else "N/A"
-    max_p = f"GHS {max_price:.2f}" if max_price is not None else "N/A"
+    min_p = f"{currency} {min_price:.2f}" if min_price is not None else "N/A"
+    max_p = f"{currency} {max_price:.2f}" if max_price is not None else "N/A"
 
     lines = [f"Store: {store_name}"]
+    lines.append(f"Currency: {currency} — always use {currency} when stating prices")
     lines.extend(info_lines)
     lines.append("")
     lines.append("Inventory Overview:")
     lines.append(f"- {total} products across {len(categories)} categories: {cat_list}")
-    lines.append(f"- Price range: {min_p} — {max_p}")
+    lines.append(f"- Overall price range: {min_p} — {max_p}")
     lines.append(f"- {in_stock} items in stock, {out_of_stock} out of stock")
     lines.append("")
-    lines.append("Full product list by category:")
+    lines.append("Full product list by category (with price range):")
     current_cat = None
     for name, cat in all_products:
         if cat != current_cat:
             current_cat = cat
-            lines.append(f"  {cat}:")
+            lo, hi = cat_prices.get(cat, (None, None))
+            price_range = (
+                f"{currency} {lo:.2f} — {currency} {hi:.2f}"
+                if lo is not None else "N/A"
+            )
+            lines.append(f"  {cat} (price range: {price_range}):")
         lines.append(f"    - {name}")
 
     return "\n".join(lines)

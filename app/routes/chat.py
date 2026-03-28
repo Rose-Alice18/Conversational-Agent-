@@ -129,10 +129,27 @@ async def chat_context_only(request: ChatRequest):
 async def chat_cua(request: CUAChatRequest):
     """CUA adapter endpoint — translates the CUA's conversation format and routes to the Hybrid agent."""
     try:
-        customer_name = request.active_query.speaker
+        active_query = request.active_query
+
+        # Derive active_query from the transcript if not explicitly provided
+        if active_query is None:
+            # Find the last non-Business entry — that is the active query
+            last_customer = next(
+                (e for e in reversed(request.conversation_transcript) if e.speaker != "Business"),
+                None,
+            )
+            if last_customer is None:
+                raise HTTPException(status_code=422, detail="No customer message found in transcript.")
+            from app.schemas import CUAActiveQuery, CUAQuery
+            active_query = CUAActiveQuery(
+                speaker=last_customer.speaker,
+                queries=[CUAQuery(timestamp=last_customer.timestamp, content=last_customer.content)],
+            )
+
+        customer_name = active_query.speaker
 
         # Collect the active query texts so we can avoid duplicating them in history
-        active_query_texts = {q.content.strip() for q in request.active_query.queries}
+        active_query_texts = {q.content.strip() for q in active_query.queries}
 
         # Build conversation history, skipping any entries that are already the active query
         lc_messages = []
@@ -140,13 +157,13 @@ async def chat_cua(request: CUAChatRequest):
             if entry.content.strip() in active_query_texts:
                 continue  # will be appended explicitly at the end
             if entry.speaker == customer_name:
-                lc_messages.append(HumanMessage(content=entry.content))
+                lc_messages.append(HumanMessage(content=f"[{entry.timestamp}] {entry.content}"))
             else:
-                lc_messages.append(AIMessage(content=entry.content))
+                lc_messages.append(AIMessage(content=f"[{entry.timestamp}] {entry.content}"))
 
         # Always append the active query last so the agent answers it
-        for q in request.active_query.queries:
-            lc_messages.append(HumanMessage(content=q.content))
+        for q in active_query.queries:
+            lc_messages.append(HumanMessage(content=f"[{q.timestamp}] {q.content}"))
 
         result = await _agent.ainvoke({"messages": lc_messages})
         raw = _get_content(result["messages"][-1]).replace("\n", " ").strip()
